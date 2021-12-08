@@ -1,0 +1,648 @@
+//ppmodel v1.2.3long Using echo parakeet chromosome
+//Fitness based on local optima, competition,  stochastic death disabled
+//Reproduction sexual and polygamous
+//Natal dispersal using ring selection
+//Stable habitat
+//
+
+//// Initialization step
+
+initialize() {
+
+
+	if (exists("slimgui"))
+	{
+		// prefix of the output file
+		defineConstant("outPref_in", "/Users/nrv690/Downloads/TRASH/trash_out_test_Allesandro");
+
+		defineConstant("coord_file_in","~/Dropbox/Hernan_main_dropbox/GENDANGERED/WP1/SLiM/flycatcher_genome/coords_SLiM_GCF_000247815.1_FicAlb1.5_chr23.txt");
+
+		defineConstant("rho_file_in","/Users/nrv690/Dropbox/Hernan_main_dropbox/GENDANGERED/WP1/SLiM/flycatcher_recomb_rate/flycatcher_rho/out_rho4Ne_win2e+05_col.hun.snpPair_runALL_chr23.txt");
+
+		defineConstant("map_in","/Users/nrv690/Downloads/TRASH/1773.txt");
+
+		defineConstant("K", 0.014); // carrying-capacity per pixel
+
+
+	}
+
+	defineConstant("del_selCoef_mean", -0.013); // Gamma - use -0.0=neutral; -0.001=lowSel; -0.014=normalSel; -0.05=highSel
+	defineConstant("del_selCoef_sd", 0.186); // Gamma - use -0.0=neutral; -0.001=lowSel; -0.014=normalSel; -0.05=highSel
+
+	// mutation rate
+	defineConstant("mu", 1e-8);
+
+
+	//	setwd("/Users/nrv690/Downloads/TRASH");
+	initializeSLiMModelType("nonWF");
+	initializeSLiMOptions(dimensionality="xy", nucleotideBased=F);
+
+	// exon, introns and non coding coordinates and rho
+	coord_file = readFile(coord_file_in);
+	// lenght of chr = last position of rho file
+	defineConstant("chromLen", asInteger(strsplit(coord_file[length(coord_file)-1],"\t")[4]));
+	defineConstant("seqLength", chromLen);
+
+	mu_deleterious_intron=(40*mu)/100;
+	mu_deleterious_exon=(40*mu)/100;
+
+
+	initializeMutationType("m1", 0.5, "f", 0.0);         // neutral
+	initializeMutationType("m2", 0.5, "g", asFloat(del_selCoef_mean), asFloat(del_selCoef_sd));  // deleterious
+	m1.convertToSubstitution = T;
+	m2.convertToSubstitution = F;
+
+	initializeGenomicElementType("g1", c(m1,m2), c(0.6,0.4));  // exon
+	initializeGenomicElementType("g2", c(m1,m2), c(0.6,0.4));       // intron
+	initializeGenomicElementType("g3", m1, 1.0);       // intron
+
+	mu_rates=c();
+	mu_ends=c();
+	for (coord_line in coord_file)
+	{
+		ROW = strsplit(coord_line, "\t");
+		feature = ROW[2];
+
+		if(feature=="exon") {
+			initializeGenomicElement(g1, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,mu_deleterious_exon);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+		}
+
+		if(feature=="intron") {
+			initializeGenomicElement(g2, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,mu_deleterious_intron);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+
+		}
+		if(feature=="non_coding") {
+			initializeGenomicElement(g3, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,0);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+		}
+
+	}
+	//	initializeMutationRate(mu_rates, mu_ends);
+	initializeMutationRate(mu);
+
+	//	initializeRecombinationRate(1e-8);
+
+	// recombination rate landscape
+	rho_file = readFile(rho_file_in);
+	rates = NULL;
+	ends = NULL;
+
+	for (rho_line in rho_file)
+	{
+		components = strsplit(rho_line, "\t");
+		ends = c(ends, asInteger(components[2]));
+		rates = c(rates, asFloat(components[7]));
+	}
+
+	defineConstant("recomb_ends", ends);
+	defineConstant("recomb_rates", rates);
+	initializeRecombinationRate(rates, ends);
+
+	//initializeRecombinationRate(1e-8);            ///// Nominal Reacombination Rate
+	initializeSex("A");
+	///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	// PARAMETERS
+	//
+	defineConstant("ID", 'SDM');
+
+	if (exists('sigma')==0){
+		defineConstant("sigma", 2);
+	}
+
+	//	if (exists('K')==0){
+	//		//		defineConstant("K", 0.061); // carrying-capacity total map
+	//		defineConstant("K", 0.02); // carrying-capacity per pixel
+	//	}
+	defineConstant("CC", 16000); // carrying-capacity per whole map
+	defineConstant("SD", 8);  // sigma_D, the dispersal distance
+	defineConstant("SI", 1.5);  // sigma_I, the spatial interaction distance
+	defineConstant("SM", 30);  // sigma_M, the mate choice distance
+	defineConstant("L", 2.8);    // mean lifetime
+	defineConstant("LT", c(rnorm(1,0.54,0.05),sort(rnorm(12,0.148,0.06)),rnorm(1,0.5,0.05), rnorm(1,0.75,0.05), 1.0));    // pink pigeon life table mortality
+	defineConstant("W", "NA");  // width and height of the simulated area
+	defineConstant("G", 1e8);  // genome length
+	defineConstant("FECUN", 1/L); // mean fecundity
+	defineConstant("RHO", FECUN/((1+FECUN) * K)); // constant in spatial competition function
+	defineConstant("prob_litter",c(rep(0,100),rpois(900,4.8))); // revised distribution May 2020-litter size prob distribution - wild
+
+	//name output files
+	defineConstant("outPref",outPref_in+"_K"+K+"_seed"+asString(getSeed()));
+
+	// spatial competition
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=SI * 3);
+	i1.setInteractionFunction("n", (1.0/(2*PI*SI^2)), SI);
+
+	// mate choice
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=SM * 3, sexSegregation = "FM");
+	i2.setInteractionFunction("n", 1.0/(2*PI*SM^2), SM);
+
+	// deleterious dominance coefficient distribution
+	delCoef=c(rexp(800,0.05),rexp(200,0.4));
+	delCoef=delCoef[delCoef<=0.5];
+	defineConstant("delCoef_distr", delCoef);
+
+}
+
+1 early() {	sim.tag=0;}
+
+1:100 late() {
+	sim.tag=sim.tag+p1.individualCount;
+}
+
+101 early() {
+	meanN=sim.tag/100;
+	defineConstant("BURN",asInteger(meanN*12));
+	defineConstant("END",asInteger(meanN*20));
+	sim.rescheduleScriptBlock(s0,BURN,BURN);
+	sim.rescheduleScriptBlock(s1,BURN+100,END);
+	sim.rescheduleScriptBlock(s2,END,END);
+	print("BLOCKS");
+        print("burn");
+        print(s0);
+        print("end");
+        print(s2);
+}
+
+s0 100000000 late() {
+	print("Outoput BURN" + "\t" + sim.generation + "\t" + time() + "\t" + date());
+	sim.outputFull(outPref + "_fulloutput_gen"+sim.generation+".slim");
+	mut=unique(p1.genomes.mutationsOfType(m2));
+	id=mut.id;
+	pos=mut.position;
+	s=mut.selectionCoeff;
+	h=mut.getValue("dom");
+	freq=sim.mutationFrequencies(p1,mut);
+	out=sim.generation + "\t" + id + "\t" + pos + "\t" + s + "\t" + h + "\t" + freq;
+	writeFile(outPref + "_fulloutput_m2_gen"+sim.generation+".txt",out);
+}
+
+s1 100000000 late() {
+	if(sim.generation % asInteger((END-BURN)/10) ==0){
+		print("Outoput BURN to END" + "\t" + sim.generation + "\t" + time() + "\t" + date());
+		sim.outputFull(outPref + "_fulloutput_gen"+sim.generation+".slim");
+		mut=unique(p1.genomes.mutationsOfType(m2));
+		id=mut.id;
+		pos=mut.position;
+		s=mut.selectionCoeff;
+		h=mut.getValue("dom");
+		freq=sim.mutationFrequencies(p1,mut);
+		out=sim.generation + "\t" + id + "\t" + pos + "\t" + s + "\t" + h + "\t" + freq;
+		writeFile(outPref + "_fulloutput_m2_gen"+sim.generation+".txt",out);
+	}
+}
+
+
+s2 100000000 late() {
+	print("END" + "\t" + sim.generation + "\t" + time() + "\t" + date());
+	sim.outputFull(outPref + "_fulloutput_gen"+sim.generation+".slim");
+	mut=unique(p1.genomes.mutationsOfType(m2));
+	id=mut.id;
+	pos=mut.position;
+	s=mut.selectionCoeff;
+	h=mut.getValue("dom");
+	freq=sim.mutationFrequencies(p1,mut);
+	out=sim.generation + "\t" + id + "\t" + pos + "\t" + s + "\t" + h + "\t" + freq;
+	writeFile(outPref + "_fulloutput_m2_gen"+sim.generation+".txt",out);
+	sim.simulationFinished();
+}
+
+
+
+reproduction() {
+
+	mate = i2.drawByStrength(individual, 1);
+	if (mate.size()) {
+		nOff = sample(prob_litter, 1);
+
+
+		POS=individual.spatialPosition; //// position of birther
+
+		CircleOne=c(c(SD,0),c(SD,SD),c(0,SD),c(-SD,SD),c(-SD,0),c(-SD,-SD),c(0,-SD),c(SD,-SD));  //// 8 points around individual at SD distance
+
+		CircleTwo=c(c(SD*2,0),c(SD*2,SD*2),c(0,SD*2),c(-SD*2,SD*2),c(-SD*2,0),c(-SD*2,-SD*2),c(0,-SD*2),c(SD*2,-SD*2)); //Another ring twice as far out
+
+		CircleThree=c(c(SD*3,0),c(SD*3,SD*3),c(0,SD*3),c(-SD*3,SD*3),c(-SD*3,0),c(-SD*3,-SD*3),c(0,-SD*3),c(SD*3,-SD*3)); //Another ring thrice as far out
+
+		CircleFour=c(c(SD*4,0),c(SD*4,SD*4),c(0,SD*4),c(-SD*4,SD*4),c(-SD*4,0),c(-SD*4,-SD*4),c(0,-SD*4),c(SD*4,-SD*4));  //Another ring quadrice as far out
+		AngleOfPositions=c(0,45,90,135,180,225,270,315);
+
+
+		for (i in seqLen(nOff)) {
+
+			ChoiceONE=c();
+			ChoiceTWO=c();
+			ChoiceTHREE=c();
+			ChoiceFOUR=c();
+
+			for (x in seq(1,length(CircleOne),2)){
+
+				CIRCLEHERE=c(CircleOne[x-1],CircleOne[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceONE=c(ChoiceONE,RESOURCE);	                             //// add it to choice
+
+				CIRCLEHERE=c(CircleTwo[x-1],CircleTwo[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceTWO=c(ChoiceTWO,RESOURCE);	                             //// add it to choice
+
+				CIRCLEHERE=c(CircleThree[x-1],CircleThree[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceTHREE=c(ChoiceTHREE,RESOURCE);	                             //// add it to choice
+
+				CIRCLEHERE=c(CircleFour[x-1],CircleFour[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceFOUR=c(ChoiceFOUR,RESOURCE);	                             //// add it to choice
+
+
+			}
+
+			//calculate means for directions, weight  closer points more
+			spokeone=pmax(0.001,mean(c(ChoiceONE[0],ChoiceONE[0],ChoiceONE[0],ChoiceONE[0],ChoiceTWO[0],
+				ChoiceTWO[0],ChoiceTWO[0],ChoiceTHREE[0],ChoiceTHREE[0],ChoiceFOUR[0])));
+			spoketwo=pmax(0.001,mean(c(ChoiceONE[1],ChoiceONE[1],ChoiceONE[1],ChoiceONE[1],ChoiceTWO[1],
+				ChoiceTWO[1],ChoiceTWO[1],ChoiceTHREE[1],ChoiceTHREE[1],ChoiceFOUR[1])));
+			spokethree=pmax(0.001,mean(c(ChoiceONE[2],ChoiceONE[2],ChoiceONE[2],ChoiceONE[2],ChoiceTWO[2],
+				ChoiceTWO[2],ChoiceTWO[2],ChoiceTHREE[2],ChoiceTHREE[2],ChoiceFOUR[2])));
+			spokefour=pmax(0.001,mean(c(ChoiceONE[3],ChoiceONE[3],ChoiceONE[3],ChoiceONE[3],ChoiceTWO[3],
+				ChoiceTWO[3],ChoiceTWO[3],ChoiceTHREE[3],ChoiceTHREE[3],ChoiceFOUR[3])));
+			spokefive=pmax(0.001,mean(c(ChoiceONE[4],ChoiceONE[4],ChoiceONE[4],ChoiceONE[4],ChoiceTWO[4],
+				ChoiceTWO[4],ChoiceTWO[4],ChoiceTHREE[4],ChoiceTHREE[4],ChoiceFOUR[4])));
+			spokesix=pmax(0.001,mean(c(ChoiceONE[5],ChoiceONE[5],ChoiceONE[5],ChoiceONE[5],ChoiceTWO[5],
+				ChoiceTWO[5],ChoiceTWO[5],ChoiceTHREE[5],ChoiceTHREE[5],ChoiceFOUR[5])));
+			spokeseven=pmax(0.001,mean(c(ChoiceONE[6],ChoiceONE[6],ChoiceONE[6],ChoiceONE[6],ChoiceTWO[6],
+				ChoiceTWO[6],ChoiceTWO[6],ChoiceTHREE[6],ChoiceTHREE[6],ChoiceFOUR[6])));
+			spokeeight=pmax(0.001,mean(c(ChoiceONE[7],ChoiceONE[7],ChoiceONE[7],ChoiceONE[7],ChoiceTWO[7],
+				ChoiceTWO[7],ChoiceTWO[7],ChoiceTHREE[7],ChoiceTHREE[7],ChoiceFOUR[7])));
+
+
+			Choices = c(spokeone,spoketwo,spokethree,spokefour,spokefive,spokesix,spokeseven,spokeeight); //compile directions
+			BEST=sample(seq(0,7),1,F,Choices); //// pick direction to move, chance of picking is scaled by enviroment of that direction
+			Gamma = rnorm(1, 0, SD);           //// find new position towards the best choice
+			Theta1 = runif(1, ( AngleOfPositions[BEST] - 22.5), AngleOfPositions[BEST] + 22.5);   //// using this equation Xnew = Xold + Gamma*theta
+
+			pos= POS + c((Gamma*cos(Theta1)),(Gamma*sin(Theta1))); //// the new position
+
+
+			if (p1.pointInBounds(pos)) { //// Check if new position is within bounds, make birth happen
+				offspring = subpop.addCrossed(individual, mate);
+				offspring.setSpatialPosition(pos);
+			}
+
+
+		}
+	}
+	return;
+
+}
+
+
+//// vary dominance coefficients
+mutation(m2) {
+	//	mut.setValue("dom", sample(runif(1,0,0.5));
+	//mut.setValue("dom", (0.5/(1+7071.07*(mut.selectionCoeff*-1))));
+	mut.setValue("dom", sample(asFloat(delCoef_distr),1));
+	//	mut.setValue("dom", runif(1));
+	return T;
+}
+fitness(m2) {
+	if (homozygous)
+		return 1.0 + mut.selectionCoeff;
+	else
+		return 1.0 + mut.getValue("dom") * mut.selectionCoeff;
+}
+
+
+////////////////////////////////OUTPUT METRICS////////////////////////
+1: late() {
+	// metrics
+
+	if(sim.generation % 2000 == 0){
+		print(sim.generation+" output _getNeutHet" + "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getNeutHet(p1);
+			writeFile(outPref + "_NeutPi_all.txt",OUT,append=T);
+			OUT=getNeutHet_spatialSample(p1,50);
+			writeFile(outPref + "_NeutPi_spatialSample.txt",OUT,append=T);
+			OUT=getPopSumm(p1);
+			writeFile(outPref + "_summaryLoad.txt",OUT,append=T);
+		}
+	}
+
+}
+
+//Initial pop gen and map read
+1 early() {
+
+	// make file headers
+	// age and  mortality metrics
+	HEAD="gen" +"\t"+ "pop" +"\t"+ "pi" +"\t"+ "N";
+	writeFile(outPref + "_NeutPi_all.txt",HEAD,append=F);
+
+	HEAD="gen" +"\t"+ "pop" +"\t"+ "pi" + "\t"+ "sampleSize" + "\t" + "coords";
+	writeFile(outPref + "_NeutPi_spatialSample.txt",HEAD,append=F);
+
+
+	HEAD="gen" +"\t"+ "pop" +"\t"+ "N" +"\t"+ "mutCount" +"\t"+ "mutFixed" +"\t"+ "meanHet" +"\t"+ "loadHomo" +"\t"+ "loadHetero" +"\t"+ "load" +"\t"+ "totalLoad" +"\t"+ "relzLoad" +"\t"+ "mskLoad";
+	writeFile(outPref + "_summaryLoad.txt",HEAD,append=F);
+
+
+
+	defineConstant("POP", 16000);
+	//	defineConstant("POP", 16000);
+	sim.addSubpop("p1", POP); //// Initial Size
+	p1.individuals.age = rdunif(POP, min=0, max=15);
+
+	//
+	//
+	p1.setSpatialBounds(c(0, 0, 700, 800));  //// Spatial Bounds of Population
+	X = readFile(map_in);
+	X[which(X=="NA")] = 0.0;
+	X[which(X<=0)] = 0.0;
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+	//
+	//
+	//
+	for (ind in p1.individuals) { //// Set up Population
+		ENV=0;
+		while (ENV<=0.05){
+
+			POS=p1.pointUniform();
+			ENV= p1.spatialMapValue("map1", POS);
+		}
+
+
+		ind.setSpatialPosition(POS);
+
+	}
+	i1.evaluate();
+}
+
+
+early() {
+
+	i1.evaluate(p1);
+	inds = p1.individuals;
+	competition = i1.totalOfNeighborStrengths(inds);
+	location = inds.spatialPosition; ////////get the x and y value of each individual
+	optimum = (p1.spatialMapValue("map1", location)+0.00001 );
+
+	//	inds.fitnessScaling =  pmin(0.95, (optimum/(optimum + RHO * competition)));			//Yannis code
+	//
+	//
+	////Age tables
+	ages = inds.age;
+	prob_mort=c(rnorm(1,0.54,0.05),sort(rnorm(12,0.148,0.06)),rnorm(1,0.5,0.05), rnorm(1,0.75,0.05), 1.0);
+	prob_mort[prob_mort<0]=0;
+	mortality = prob_mort[ages];
+	survival = 1 - mortality;
+
+	endfit =  pmin(0.95, ((optimum/(optimum + RHO * competition))* survival));
+	inds.fitnessScaling = endfit;
+
+
+	// Output per gen stats
+	if(sim.generation % 100 == 0){
+		print("Gen:  "+ sim.generation);
+		print("Date:	 "+ date());
+		print("Time:	 "+ time());
+		print("Pop:  "+ p1.individualCount);
+		print("comp:  "+mean(competition));
+		print("Mean fit: "+mean(p1.individuals.fitnessScaling));
+		print("memory usage: "+usage()/1000+"Gb");
+	}
+
+}
+
+
+
+1: late() {
+	// to be ready for mate choice
+	i2.evaluate(p1);
+}
+
+
+2: late() {
+
+	GEN=sim.generation;
+
+	if (p1.individualCount<=1)
+	{//// Terminate and print message if there is a collapse
+		print('Population Total Collapse');
+		sim.simulationFinished();
+	}
+}
+
+///// Finito
+
+
+//Functions
+
+function (s)getNeutHet (o pop) {
+
+	total = 0.0;
+
+	for (ind in p1.individuals)
+	{
+		// Calculate the nucleotide heterozygosity of this individual
+		muts0 = ind.genomes[0].mutations;
+		muts1 = ind.genomes[1].mutations;
+
+		Nmuts0 = muts0.mutationType == m1;
+		Nmuts1 = muts1.mutationType == m1;
+
+		// Count the shared mutations
+		shared_count = sum(match(muts0, muts1) >= 0);
+
+		// All remaining mutations in the genomes are unshared (i.e. heterozygous)
+		unshared_count = muts0.size() + muts1.size() - 2 * shared_count;
+
+		// pi is the mean heterozygosity across the chromosome
+		pi_ind = unshared_count / (sim.chromosome.lastPosition + 1);
+		total = total + pi_ind;
+	}
+
+	size = p1.individuals.size();
+	pi = total / size;
+	out = sim.generation + "\t" + pop.id + "\t" + pi + "\t" +size;
+	return out;
+
+}
+
+
+function (s)getNeutHet_spatialSample (o pop, i sampSize) {
+
+	i2.evaluate(pop);
+	target=pop.individuals[0];
+	indvs=i2.drawByStrength(target, sampSize);
+
+
+	total = 0.0;
+
+	for (ind in indvs)
+	{
+		// Calculate the nucleotide heterozygosity of this individual
+		muts0 = ind.genomes[0].mutations;
+		muts1 = ind.genomes[1].mutations;
+
+		Nmuts0 = muts0.mutationType == m1;
+		Nmuts1 = muts1.mutationType == m1;
+
+		// Count the shared mutations
+		shared_count = sum(match(muts0, muts1) >= 0);
+
+		// All remaining mutations in the genomes are unshared (i.e. heterozygous)
+		unshared_count = muts0.size() + muts1.size() - 2 * shared_count;
+
+		// pi is the mean heterozygosity across the chromosome
+		pi_ind = unshared_count / (sim.chromosome.lastPosition + 1);
+		total = total + pi_ind;
+	}
+
+	size = indvs.size();
+	pi = total / size;
+	out = sim.generation + "\t" + pop.id + "\t" + pi + "\t" +size + "\t" + paste(target.spatialPosition,sep=",");
+	return out;
+
+}
+
+function (s) getPopSumm(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m2);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	freqMut=sim.mutationFrequencies(pop,m_uniq);
+	ScoefMut=abs(m_uniq.selectionCoeff);
+	DcoefMut=m_uniq.getValue("dom");
+	HomRef=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	HomAlt=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het1=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het2=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	Het=(Het1+Het2);
+	mHet=mean(Het);
+	mLoad_homo=sum(ScoefMut*HomAlt);
+	mLoad_hetero=sum(ScoefMut*DcoefMut*Het);
+	mLoad=mLoad_homo+mLoad_hetero;
+	totalLoad=sum(freqMut*ScoefMut);
+	relzLoad=sum(freqMut^2*ScoefMut)+ (2*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+	mskLoad=sum(freqMut*ScoefMut) - sum(freqMut^2*ScoefMut) - (2*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+
+	FROH_total=0;
+	for(indv in pop.individuals){
+		indm = sortBy(indv.genomes.mutations, "position");
+		indm_uniq = unique(indm);
+		genotype = sapply(indm_uniq, "sum(indm == applyValue);");
+		if (isNULL(genotype)) {
+			FROH_total = FROH_total+ 0;
+			next;
+		}
+		ID_het = (genotype == 1); //outputs T/F for genotypes if they are het or homDer
+		ID_homDer = (genotype == 2);
+		pos_het = indm_uniq.position[ID_het]; //outputs positions of heterozgoys genotypes
+		startpos = c(0, pos_het); //adds 0 to beggining of vector of hets
+		endpos = c(pos_het, sim.chromosome.lastPosition); //adds last position in genome to vector of hets
+		pos_het_diff = endpos - startpos;
+		ROHcutoff=1e6; // same for a different ROH cutoff value
+		ROH_startpos = startpos[pos_het_diff > ROHcutoff];
+		ROH_endpos = endpos[pos_het_diff > ROHcutoff];
+		ROH_length = pos_het_diff[pos_het_diff > ROHcutoff];
+		ROH_length_sum = sum(ROH_length);
+		ROH_out=ROH_length_sum/chromLen;
+		FROH_total=FROH_total+ROH_out;
+	}
+	FROH_mean=FROH_total/pop.individualCount;
+
+	relzLoad_FROH=sum((1-FROH_mean)*freqMut^2*ScoefMut+FROH_mean*freqMut*ScoefMut)+ 2*(1-FROH_mean)*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut);
+	mskLoad_FROH= sum(freqMut*ScoefMut) - (sum((1-FROH_mean)*freqMut^2*ScoefMut+FROH_mean*freqMut*ScoefMut)) -  (2*(1-FROH_mean)*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+
+
+	fitness_indv=c();
+	for(indv in pop.individuals){
+		// Calculate individual fitness
+		muts0_m2 = indv.genomes[0].mutationsOfType(m2);
+		muts1_m2 = indv.genomes[1].mutationsOfType(m2);
+		HOMO_m2=setIntersection(muts0_m2,muts1_m2);
+		HETERO_m2=setSymmetricDifference(muts0_m2,muts1_m2);
+		if(length(HETERO_m2)>0){fit_hetero=abs(HETERO_m2.selectionCoeff*HETERO_m2.getValue("dom"));}
+		if(length(HETERO_m2)==0){fit_hetero=0;}
+		fit_homo=HOMO_m2.selectionCoeff;
+		if(length(fit_homo)==0){fit_homo=0;}
+		indv_fit=sum(1-fit_homo)*sum(1-fit_hetero);
+		fitness_indv=c(fitness_indv,indv_fit);
+	}
+
+	fitness_cached=pop.cachedFitness(pop.individuals.index);
+
+
+	out=sim.generation +"\t"+ pop.id +"\t"+ indvCount +"\t"+ Mutcount +"\t"+ sum(HomAlt==1.0)+"\t"+ mHet +"\t"+ mLoad_homo +"\t"+ mLoad_hetero +"\t"+ mLoad +"\t"+ totalLoad +"\t"+ relzLoad +"\t"+ mskLoad +"\t"+ relzLoad_FROH +"\t"+ mskLoad_FROH+"\t"+mean(fitness_indv)+"\t"+sd(fitness_indv)+"\t"+mean(fitness_cached)+"\t"+sd(fitness_cached);
+	return(out);
+}
+
+function (s) geths(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m2);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	freqMut=sim.mutationFrequencies(pop,m_uniq);
+	ScoefMut=abs(m_uniq.selectionCoeff);
+	DcoefMut=m_uniq.getValue("dom");
+	out=sim.generation +"\t"+ pop.id +"\t"+ freqMut+"\t"+ ScoefMut +"\t"+ DcoefMut;
+	return(out);
+}
+
+function (s) getIndvLoad(o pop, i sampSize)
+{
+	i2.evaluate(pop);
+	target=pop.sampleIndividuals(1);
+	pop_indv=i2.drawByStrength(target, sampSize);
+	out=c();
+	for(indv in pop_indv){
+		mut=indv.uniqueMutationsOfType(m2);
+		if(length(mut)==0){next;}
+		index=indv.index;
+		age=indv.age;
+		mutOrgGen=mut.originGeneration;
+		mutOrgPop=mut.subpopID;
+		mutS=mut.selectionCoeff;
+		mutH=mut.getValue("dom");
+		mutFreq=sim.mutationFrequencies(pop,mut);
+		HomRef=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==F)/indv.size();");
+		HomAlt=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+		Het=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==F)/indv.size();")+sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+
+		Lmut=length(mut);
+		f11=sum(HomAlt)/Lmut;
+		sHom=mean(abs(mutS[HomAlt==1]));
+		if(isNULL(sHom)){sHom=0;}
+		f01=sum(Het)/Lmut;
+		shHet=mean(abs(mutS[Het==1])*mutH[Het==1]);
+		if(isNULL(shHet)){shHet=0;}
+		sHet=mean(abs(mutS[Het==1]));
+		if(isNULL(sHet)){sHet=0;}
+
+		relzLoad_f2=Lmut*(f11*sHom+f01*shHet);
+		mskLoad_f2=Lmut*f01*((0.5*sHet)-shHet);
+		totalLoad_f2=Lmut*(f11*sHom+(0.5*f01)*sHet);
+
+		indv_out=sim.generation +"\t"+ pop.id +"\t"+ index +"\t"+ age +"\t"+ relzLoad_f2 +"\t"+ mskLoad_f2 +"\t"+ totalLoad_f2 +"\t"+ pop.cachedFitness(indv.index);
+
+		out=c(out,indv_out);
+	}
+	return(out);
+}
