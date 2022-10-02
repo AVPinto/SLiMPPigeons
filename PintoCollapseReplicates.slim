@@ -1,0 +1,2886 @@
+//Burn in should start at 88694
+//100 years of stability, habitat reduction, then 200 years of stable small habitat
+//Model as of 16/06/2021
+//
+
+
+//// Initialization step
+
+initialize() {
+	
+	setwd("~/Desktop/Mauritius/Binary interpolations/1773-1997"); //Map files located here
+	initializeSLiMModelType("nonWF");
+	initializeSLiMOptions(dimensionality="xy", nucleotideBased=F);
+	
+	//name output files
+	defineConstant("outPref","~/Desktop/Mauritius/testoutput/pp1.3.1_K028_"+"seed"+asString(getSeed()));
+	
+	// read in existing m2s
+	defineConstant("m2in", "~/Desktop/Mauritius/Burn In/out_burnin_v2_21_05_21_K0.028_seed1667303104376_fulloutput_m2_gen88694.txt");
+	
+	//read in burn in file
+	defineConstant("burnin", "~/Desktop/Mauritius/Burn In/out_burnin_v2_21_05_21_K0.028_seed1667303104376_fulloutput_gen88694.slim");
+	
+	//echo parakeet model genome and mutation init
+	defineConstant("del_selCoef_mean", -0.013); // Gamma - use -0.0=neutral; -0.001=lowSel; -0.014=normalSel; -0.05=highSel
+	defineConstant("del_selCoef_sd", 0.186); // Gamma - use -0.0=neutral; -0.001=lowSel; -0.014=normalSel; -0.05=highSel
+	defineConstant("coord_file_in","~/Desktop/Mauritius/Burn In/coords_SLiM_GCF_000247815.1_FicAlb1.5_chr23.txt");
+	defineConstant("rho_file_in","~/Desktop/Mauritius/Burn In/out_rho4Ne_win2e+05_col.hun.snpPair_runALL_chr23.txt");
+	
+	
+	// mutation rate
+	defineConstant("mu", 1e-8);
+	
+	// exon, introns and non coding coordinates and rho
+	coord_file = readFile(coord_file_in);
+	// lenght of chr = last position of rho file
+	defineConstant("chromLen", asInteger(strsplit(coord_file[length(coord_file)-1],"\t")[4]));
+	defineConstant("seqLength", chromLen);
+	
+	// if you use only deleterious mutation then mutation rate has to be adjusted, e.g. 40% of mutations to be delterious	
+	//	mu_deleterious_intron=(40*mu)/100;
+	//	mu_deleterious_exon=(40*mu)/100;
+	
+	// here we use both neutral and deleterious so full rate is used and the proportion is controled with initializeGenomicElementType below 
+	mu_deleterious_intron=mu;
+	mu_deleterious_exon=mu;
+	
+	
+	initializeMutationType("m1", 0.5, "f", 0.0);         // non-coding
+	initializeMutationType("m2", 0.5, "g", asFloat(del_selCoef_mean), asFloat(del_selCoef_sd));  // deleterious
+	
+	// neutral mutations can be turn into subtituions if fix because they don't affect fitness
+	// deleterious mutations should not
+	m1.convertToSubstitution=T;
+	m2.convertToSubstitution=F;
+	
+	// this would be used to include only deleterious mutations	
+	//	initializeGenomicElementType("g1", c(m1,m2), c(0,0.4));  // exon
+	//	initializeGenomicElementType("g2", c(m1,m2), c(0,0.4));       // intron
+	//	initializeGenomicElementType("g3", m1, 0);       // intron
+	
+	// this is used to include both types
+	initializeGenomicElementType("g1", c(m1,m2), c(0.6,0.4));  // exon
+	initializeGenomicElementType("g2", c(m1,m2), c(0.6,0.4));       // intron
+	initializeGenomicElementType("g3", m1, 0);       // intron
+	
+	
+	// with the code below you can assign mutation rates to each element if needed. Here is redudant as mutation rate is flat
+	// this code is still needed to initializeGenomicElement according to the genomic map
+	mu_rates=c();
+	mu_ends=c();
+	for (coord_line in coord_file)
+	{
+		ROW = strsplit(coord_line, "\t");
+		feature = ROW[2];
+		
+		if(feature=="exon") {
+			initializeGenomicElement(g1, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,mu_deleterious_exon);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+		}
+		
+		if(feature=="intron") {
+			initializeGenomicElement(g2, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,mu_deleterious_intron);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+		
+		}
+		if(feature=="non_coding") {
+			initializeGenomicElement(g3, asInteger(ROW[3]), asInteger(ROW[4]));
+			mu_rates=c(mu_rates,0);
+			mu_ends=c(mu_ends,asInteger(ROW[4]));
+		}
+	
+	}
+	initializeMutationRate(mu_rates, mu_ends);
+	
+	// recombination rate according to recombination map	
+	// recombination rate landscape
+	rho_file = readFile(rho_file_in);
+	rates = NULL;
+	ends = NULL;
+	
+	for (rho_line in rho_file)
+	{
+		components = strsplit(rho_line, "\t");
+		ends = c(ends, asInteger(components[2]));
+		rates = c(rates, asFloat(components[7]));
+	}
+	
+	defineConstant("recomb_ends", ends);
+	defineConstant("recomb_rates", rates);
+	initializeRecombinationRate(rates, ends);
+	
+	
+	// deleterious dominance coefficient distribution
+	delCoef=c(rexp(800,0.05),rexp(200,0.4));
+	delCoef=delCoef[delCoef<=1];
+	defineConstant("delCoef_distr", delCoef);
+	
+	
+	//////////////////////////////////////////////PARAMETERS///////////////////////////////////////
+	
+	
+	defineConstant("ID", 'SDM');
+	
+	if (exists('sigma')==0){
+		defineConstant("sigma", 2);
+	}
+	
+	if (exists('slimgui')){
+		defineConstant("K", 0.028); // carrying-capacity per pixel
+		defineConstant("Klate", 0.028); // carrying-capacity per pixel used late
+		defineConstant("SM", 30);  // sigma_M, the mate choice distance
+		defineConstant("SMlate", 30);  // sigma_M, the mate choice distance used late
+	
+	}
+	defineConstant("SD", 8);  // sigma_D, the dispersal distance
+	defineConstant("SI", 1.5);  // sigma_I, the spatial interaction distance
+	defineConstant("L", 2.8);    // mean lifetime 
+	defineConstant("LT", c(rnorm(1,0.54,0.05),sort(rnorm(12,0.148,0.06)),rnorm(1,0.5,0.05), rnorm(1,0.75,0.05), 1.0));    // pink pigeon life table mortality
+	defineConstant("W", "NA");  // width and height of the simulated area
+	defineConstant("G", 1e8);  // genome length
+	defineConstant("FECUN", 1/L); // mean fecundity
+	defineConstant("RHO", FECUN/((1+FECUN) * K)); // constant in spatial competition function
+	defineConstant("RHOlate", FECUN/((1+FECUN) * Klate)); // constant in spatial competition function
+	
+	defineConstant("prob_litter",c(rep(0,100),rpois(900,4.8))); // revised distribution May 2020-litter size prob distribution - wild
+	
+	// spatial competition
+	initializeInteractionType(1, "xy", reciprocal=T, maxDistance=SI * 3);
+	i1.setInteractionFunction("n", (1.0/(2*PI*SI^2)), SI);
+	
+	// mate choice
+	initializeInteractionType(2, "xy", reciprocal=T, maxDistance=	SM * 3);
+	i2.setInteractionFunction("n", 1.0/(2*PI*SM^2), SM);
+	
+	//late mate choice
+	initializeInteractionType(3, "xy", reciprocal=T, maxDistance=	SMlate * 3);
+	i3.setInteractionFunction("n", 1.0/(2*PI*SMlate^2), SMlate);
+
+
+
+}
+
+
+//// vary dominance coefficients
+mutation(m2) {
+	mut.setValue("dom", sample(asFloat(delCoef_distr),1));
+	return T;
+
+}
+
+
+fitness(m2) {
+	if (homozygous)
+		return 1.0 + mut.selectionCoeff;
+	else
+		return 1.0 + mut.getValue("dom") * mut.selectionCoeff;
+}
+
+
+/////////////////////////////REPRODUCTION//////////////////////////////////////////////////////
+reproduction() {
+	
+	mateearly = i2.drawByStrength(individual, 1);
+	matelate =  i3.drawByStrength(individual, 1);
+	
+	if (mateearly.size() == 0) {mateearly = 0;
+	}
+	if (matelate.size() == 0) {matelate = 0;
+	}
+	
+	mates = c(mateearly,matelate);
+	
+	Julia  = ifelse(sim.generation < 89000, 0,	1);
+	
+	mate = mates[Julia];
+	
+	if (isObject(mate)) {
+		nOff = sample(prob_litter, 1);
+		
+		
+		POS=individual.spatialPosition; //// position of birther
+		
+		CircleOne=c(c(SD,0),c(SD,SD),c(0,SD),c(-SD,SD),c(-SD,0),c(-SD,-SD),c(0,-SD),c(SD,-SD));  //// 8 points around individual at SD distance
+		
+		CircleTwo=c(c(SD*2,0),c(SD*2,SD*2),c(0,SD*2),c(-SD*2,SD*2),c(-SD*2,0),c(-SD*2,-SD*2),c(0,-SD*2),c(SD*2,-SD*2)); //Another ring twice as far out
+		
+		CircleThree=c(c(SD*3,0),c(SD*3,SD*3),c(0,SD*3),c(-SD*3,SD*3),c(-SD*3,0),c(-SD*3,-SD*3),c(0,-SD*3),c(SD*3,-SD*3)); //Another ring thrice as far out
+		
+		CircleFour=c(c(SD*4,0),c(SD*4,SD*4),c(0,SD*4),c(-SD*4,SD*4),c(-SD*4,0),c(-SD*4,-SD*4),c(0,-SD*4),c(SD*4,-SD*4));  //Another ring quadrice as far out
+		AngleOfPositions=c(0,45,90,135,180,225,270,315);
+		
+		
+		for (i in seqLen(nOff)) {
+			
+			ChoiceONE=c();
+			ChoiceTWO=c();
+			ChoiceTHREE=c();
+			ChoiceFOUR=c();
+			
+			for (x in seq(1,length(CircleOne),2)){
+				
+				CIRCLEHERE=c(CircleOne[x-1],CircleOne[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceONE=c(ChoiceONE,RESOURCE);	                             //// add it to choice
+				
+				CIRCLEHERE=c(CircleTwo[x-1],CircleTwo[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceTWO=c(ChoiceTWO,RESOURCE);	                             //// add it to choice
+				
+				CIRCLEHERE=c(CircleThree[x-1],CircleThree[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceTHREE=c(ChoiceTHREE,RESOURCE);	                             //// add it to choice
+				
+				CIRCLEHERE=c(CircleFour[x-1],CircleFour[x]);
+				POSHERE=(POS+CIRCLEHERE);                                    //// Position in circle around individual
+				RESOURCE=p1.spatialMapValue("map1", POSHERE);                //// Resource at position
+				ChoiceFOUR=c(ChoiceFOUR,RESOURCE);	                             //// add it to choice
+			
+			
+			}
+			
+			//calculate means for directions, weight  closer points more
+			spokeone=pmax(0.001,mean(c(ChoiceONE[0],ChoiceONE[0],ChoiceONE[0],ChoiceONE[0],ChoiceTWO[0],
+				ChoiceTWO[0],ChoiceTWO[0],ChoiceTHREE[0],ChoiceTHREE[0],ChoiceFOUR[0])));
+			spoketwo=pmax(0.001,mean(c(ChoiceONE[1],ChoiceONE[1],ChoiceONE[1],ChoiceONE[1],ChoiceTWO[1],
+				ChoiceTWO[1],ChoiceTWO[1],ChoiceTHREE[1],ChoiceTHREE[1],ChoiceFOUR[1])));
+			spokethree=pmax(0.001,mean(c(ChoiceONE[2],ChoiceONE[2],ChoiceONE[2],ChoiceONE[2],ChoiceTWO[2],
+				ChoiceTWO[2],ChoiceTWO[2],ChoiceTHREE[2],ChoiceTHREE[2],ChoiceFOUR[2])));
+			spokefour=pmax(0.001,mean(c(ChoiceONE[3],ChoiceONE[3],ChoiceONE[3],ChoiceONE[3],ChoiceTWO[3],
+				ChoiceTWO[3],ChoiceTWO[3],ChoiceTHREE[3],ChoiceTHREE[3],ChoiceFOUR[3])));
+			spokefive=pmax(0.001,mean(c(ChoiceONE[4],ChoiceONE[4],ChoiceONE[4],ChoiceONE[4],ChoiceTWO[4],
+				ChoiceTWO[4],ChoiceTWO[4],ChoiceTHREE[4],ChoiceTHREE[4],ChoiceFOUR[4])));
+			spokesix=pmax(0.001,mean(c(ChoiceONE[5],ChoiceONE[5],ChoiceONE[5],ChoiceONE[5],ChoiceTWO[5],
+				ChoiceTWO[5],ChoiceTWO[5],ChoiceTHREE[5],ChoiceTHREE[5],ChoiceFOUR[5])));
+			spokeseven=pmax(0.001,mean(c(ChoiceONE[6],ChoiceONE[6],ChoiceONE[6],ChoiceONE[6],ChoiceTWO[6],
+				ChoiceTWO[6],ChoiceTWO[6],ChoiceTHREE[6],ChoiceTHREE[6],ChoiceFOUR[6])));
+			spokeeight=pmax(0.001,mean(c(ChoiceONE[7],ChoiceONE[7],ChoiceONE[7],ChoiceONE[7],ChoiceTWO[7],
+				ChoiceTWO[7],ChoiceTWO[7],ChoiceTHREE[7],ChoiceTHREE[7],ChoiceFOUR[7])));
+			
+			
+			Choices = c(spokeone,spoketwo,spokethree,spokefour,spokefive,spokesix,spokeseven,spokeeight); //compile directions
+			BEST=sample(seq(0,7),1,F,Choices); //// pick direction to move, chance of picking is scaled by enviroment of that direction
+			Gamma = rnorm(1, 0, SD);           //// find new position towards the best choice
+			Theta1 = runif(1, ( AngleOfPositions[BEST] - 22.5), AngleOfPositions[BEST] + 22.5);   //// using this equation Xnew = Xold + Gamma*theta
+			
+			pos= POS + c((Gamma*cos(Theta1)),(Gamma*sin(Theta1))); //// the new position
+			
+			
+			if (p1.pointInBounds(pos)) { //// Check if new position is within bounds, make birth happen
+				offspring = subpop.addCrossed(individual, mate);
+				offspring.setSpatialPosition(pos);
+			}
+		
+		
+		}
+	}
+	return;
+
+}
+
+
+
+////////////////////////////////OUTPUT METRICS////////////////////////
+s0 late() {
+	// metrics
+	
+	if(sim.generation % 5 == 0)
+	{
+		print(sim.generation+" output getIBD "+ "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getIBD(p1);
+			writeFile(outPref + "_getIBD.txt",OUT,append=T);
+		}
+		
+		print(sim.generation+" output getNeutHet" + "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getNeutHet(pop);
+			writeFile(outPref + "_getNeutHet.txt",OUT,append=T);
+		}
+		
+		print(sim.generation+" output getPopSumm" + "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getPopSummary(pop);
+			writeFile(outPref +"_summaryLoad.txt",OUT,append=T);
+		}
+		
+		print(sim.generation+" output getIndvMort "+ "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getIndvMort(p1,30);
+			writeFile(outPref + "_getIndvMort.txt",OUT,append=T);
+		}
+		
+		print(sim.generation+"_NeutPi_spatialSample.txt" + "\t" + time() + "\t" + date());
+		for(pop in sim.subpopulations){
+			OUT=getNeutHet_spatialSample(p1,50);
+			writeFile(outPref + "_NeutPi_spatialSample.txt",OUT,append=T);
+			
+			print(sim.generation+"_getIndvLoad.txt" + "\t" + time() + "\t" + date());
+			for(pop in sim.subpopulations){
+				OUT=getIndvLoad(p1,50);
+				writeFile(outPref + "_getIndvLoad.txt",OUT,append=T);
+			}
+			
+			print(sim.generation+"_getIndvMut.txt" + "\t" + time() + "\t" + date());
+			for(pop in sim.subpopulations){
+				OUT=getIndvMut(p1,50);
+				writeFile(outPref + "_getIndvMut.txt",OUT,append=T);
+			}
+		
+		
+		}
+	
+	}
+
+}
+
+
+////////////////////////////////////////////////////////////////step ONE early//////////////////////////////////////
+1 early() {
+	
+	///////// Make output file headers
+	/*
+	//Individual Mutation Load
+	HEAD = "gen" +"\t"+ "pop.id" +"\t"+ "index" +"\t"+ "age" +"\t"+ "relzLoad_f2" +"\t"+ "mskLoad_f2" +"\t"+ "totalLoad_f2"+"\t"+ "mutS" +"\t"+ "mutH" +"\t"+ "mutFreq";
+	writeFile(outPref + "_getIndvMutLoad.txt",HEAD,append=F);
+
+
+	//Pop Summary
+	head  = "	sim.generation" +"\t"+ "pop.id" +"\t"+ "indvCount" +"\t"+ "Mutcount" +"\t"+ "sum(HomAlt==1.0)"+"\t"+ "mHet" +"\t"+ "mLoad_homo" +"\t"+ "mLoad_hetero" +"\t"+ "mLoad";
+	writeFile(outPref+"_getPopSumm.txt",head,append=F);
+*/
+	// Individual mutations
+	head  = "sim.generation" +"\t"+ "pop.id" +"\t"+ "index" +"\t"+ "age"+"\t"+ "ROH_out1" +"\t"+ "ROH_out1" +"\t"+ "mutOrgGen"+"\t"+ "mutOrgPop" +"\t"+ "mutS" +"\t"+ "mutH" +"\t"+ "mutFreq" +"\t"+ "HomRef" +"\t"+ "HomAlt" +"\t"+ "Het";
+	writeFile(outPref+"_getIndvMut.txt",head,append=F);
+	
+	// isolation by distance function
+	head  = c("sim.generation" +"\t"+ "popsize" +"\t"+ "diffbyBP" +"\t"+ "dist" +"\t"+ "noll_pos" +"\t"+ "ett_pos");
+	writeFile(outPref+"_getIBD.txt",head,append=T);
+	
+	// Neutral mutations
+	head  = "gen" + "\t" + "pi" + "\t" + "n";
+	writeFile(outPref+"_getNeutHet.txt",head,append=F);
+	
+	
+	//New, Cooler, Pop Summ
+	HEAD="gen" +"\t"+ "pop" +"\t"+ "N" +"\t"+ "mutCount" +"\t"+ "mutFixed" +"\t"+ "meanHet" +"\t"+ "loadHomo" +"\t"+ "loadHetero" +"\t"+ "load" +"\t"+ "totalLoad" +"\t"+ "relzLoad" +"\t"+ "mskLoad" +"\t"+ "relzLoad_FROH" +"\t"+ "mskLoad_FROH" +"\t"+ "fitness_indv" +"\t"+ "sd(fitness_indv)" +"\t"+ "fitness_cached"+"\t"+ "sd(fitness_cached)" +"\t"+ "hab";
+	writeFile(outPref + "_summaryLoad.txt",HEAD,append=F);
+	
+	//Mortality partition
+	head = c("sim.generation" +"\t"+ "index" +"\t"+ "age" +"\t"+ "age_fit" +"\t"+ "end_fit");
+	writeFile(outPref+"_getIndvMort.txt",head,append=F);
+	
+	//Neutral Pi spatial
+	HEAD="gen" +"\t"+ "pop" +"\t"+ "pi" + "\t"+ "sampleSize" + "\t" + "coords";
+	writeFile(outPref + "_NeutPi_spatialSample.txt",HEAD,append=F);
+	
+	//Individual Load
+	HEAD = "gen" +"\t"+ "pop.id" +"\t"+ "index" +"\t"+ "age" +"\t"+ "relzLoad_f2" +"\t"+ "mskLoad_f2" +"\t"+ "totalLoad_f2" +"\t"+ "pop.cachedFitness(indv.index)" ;
+	writeFile(outPref + "_getIndvLoad.txt",HEAD,append=F);
+	
+	
+	
+	
+	
+	/////Map Read/////
+	defineConstant("POP", 16000);
+	//	defineConstant("POP", 16000);
+	sim.addSubpop("p1", POP); //// Initial Size
+	p1.individuals.age = rdunif(POP, min=0, max=15);
+	
+	p1.setSpatialBounds(c(0, 0, 700, 800));  //// Spatial Bounds of Population
+	X = readFile("1773 .txt");
+	X[which(X=="NA")] = 0.0;
+	X[which(X<=0)] = 0.0;
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+	
+	
+	for (ind in p1.individuals) { //// Set up Population
+		ENV=0;
+		while (ENV<=0.05){
+			
+			POS=p1.pointUniform();
+			ENV= p1.spatialMapValue("map1", POS);
+		}
+		
+		
+		ind.setSpatialPosition(POS);
+	
+	}
+	
+	
+	i1.evaluate();
+}
+
+///Sim read in
+
+1 early() {
+	sim.readFromPopulationFile(burnin); //read file
+	//define map again for some reason
+	p1.setSpatialBounds(c(0, 0, 700, 800));  //// Spatial Bounds of Population
+	X = readFile("1773 .txt");
+	X[which(X=="NA")] = 0.0;
+	X[which(X<=0)] = 0.0;
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+	
+	//read m2 file
+	m2File=readFile(m2in);
+	
+	id=c();pos=c();s=c();h=c();
+	
+	for (line in m2File) {
+		lineSplit=strsplit(line,"\t");
+		id=c(id,asFloat(lineSplit[1])); // use correct index and do the same for pos, s and h
+	}
+	
+	for (line in m2File) {
+		lineSplit=strsplit(line,"\t");
+		pos=c(pos,asFloat(lineSplit[2])); // use correct index and do the same for pos, s and h
+	}
+	
+	for (line in m2File) {
+		lineSplit=strsplit(line,"\t");
+		s=c(s,asFloat(lineSplit[3])); // use correct index and do the same for pos, s and h
+	}
+	
+	for (line in m2File) {
+		lineSplit=strsplit(line,"\t");
+		h=c(h,asFloat(lineSplit[4])); // use correct index and do the same for pos, s and h
+	}
+	
+	M2mut = sim.mutationsOfType(m2);
+	
+	for (i in M2mut) {
+		//get ID of mutation
+		Mid = i.id;
+		
+		//find position in table for a specific id
+		id_x = match(asInteger(Mid),asInteger(id));
+		
+		// sanity check that there is only one match
+		if(length(id_x)!=1){print("unmatched ID!!!");}
+		
+		// sanity check that pos and s match
+		if(asInteger(i.position) != asInteger(pos[id_x]) | asInteger(i.selectionCoeff) != asInteger(s[id_x])){print("wrong ID match!!!");}
+		
+		//find the dominance coef of that id
+		dom = h[id_x];
+		
+		//set dominance value of orginal mutation
+		i.setValue("dom", dom);
+	
+	}
+
+
+}
+
+//Recaclcualte fitness with burn in m2 H
+1 late () {
+	recalculateFitness();
+}
+
+
+///////////////////////////FITNESS CALCULATION///////////////////////////////
+
+early() {
+	
+	i1.evaluate(p1);
+	inds = p1.individuals;
+	competition = i1.totalOfNeighborStrengths(inds);
+	location = inds.spatialPosition; ////////get the x and y value of each individual
+	optimum = (p1.spatialMapValue("map1", location)+0.00001 );
+	//	defineConstant("RHO", FECUN/((1+FECUN) * K)); // constant in spatial competition function
+	//	inds.fitnessScaling =  pmin(0.95, (optimum/(optimum + RHO * competition)));			//Yannis code
+	////Age tables 
+	ages = inds.age;
+	prob_mort=c(rnorm(1,0.54,0.05),sort(rnorm(12,0.148,0.06)),rnorm(1,0.5,0.05), rnorm(1,0.75,0.05), 1.0);
+	prob_mort[prob_mort<0]=0;
+	mortality = prob_mort[ages];
+	survival = 1 - mortality;
+	inds.tagF  = survival;
+	
+	//Increased carrying capacity
+	Row = ifelse(sim.generation < 89000, RHO, RHOlate);
+	inds.fitnessScaling =  pmin(0.95, (optimum/(optimum + Row * competition)* survival));
+	inds.z = pmin(0.95, optimum/(optimum + Row * competition));
+	//Constant carrying capacity
+	//inds.fitnessScaling =  pmin(0.95, (optimum/(optimum + RHO * competition)* survival));
+	//inds.z = pmin(0.95, optimum/(optimum + RHO * competition));
+	
+	// Output per gen stats
+	print("Gen:  "+ sim.generation);
+	print("Pop:  "+ p1.individualCount);
+	print("comp:  "+mean(competition));
+	print("Mean fit: "+mean(p1.individuals.fitnessScaling));
+
+}
+
+
+1: late() {
+	// to be ready for mate choice
+	i2.evaluate(p1);
+	i3.evaluate(p1);
+}
+//
+
+2: late() {
+	
+	GEN=sim.generation;
+	
+	if (p1.individualCount<=1)
+	{//200// Terminate and print message if there is a collapse
+		print('Population Total Collapse');
+		sim.simulationFinished();
+	}
+}
+
+
+
+/////////////////////////////////////FUNCTIONS//////////////////////////////////////////////
+
+
+//Get Mean Neutral Heterozygosity across the population
+function (s)getNeutHet (o pop) {
+	
+	total = 0.0;
+	
+	for (ind in p1.individuals)
+	{
+		// Calculate the nucleotide heterozygosity of this individual
+		muts0 = ind.genomes[0].mutations;
+		muts1 = ind.genomes[1].mutations;
+		
+		Nmuts0 = muts0.mutationType == m1;
+		Nmuts1 = muts1.mutationType == m1;
+		
+		// Count the shared mutations
+		shared_count = sum(match(muts0, muts1) >= 0);
+		
+		// All remaining mutations in the genomes are unshared (i.e. heterozygous)
+		unshared_count = muts0.size() + muts1.size() - 2 * shared_count;
+		
+		// pi is the mean heterozygosity across the chromosome
+		pi_ind = unshared_count / (sim.chromosome.lastPosition + 1);
+		total = total + pi_ind;
+	}
+	
+	size = p1.individuals.size();
+	pi = total / p1.individuals.size();
+	out = sim.generation + "\t" + pi + "\t" +size;
+	return out;
+
+}
+
+function (s)getNeutHet_spatialSample (o pop, i sampSize) {
+	
+	i2.evaluate(pop);
+	target=pop.individuals[0];
+	indvs=i2.drawByStrength(target, sampSize);
+	
+	total = 0.0;
+	
+	for (ind in indvs)
+	{
+		// Calculate the nucleotide heterozygosity of this individual
+		muts0 = ind.genomes[0].mutations;
+		muts1 = ind.genomes[1].mutations;
+		
+		Nmuts0 = muts0.mutationType == m1;
+		Nmuts1 = muts1.mutationType == m1;
+		
+		// Count the shared mutations
+		shared_count = sum(match(muts0, muts1) >= 0);
+		
+		// All remaining mutations in the genomes are unshared (i.e. heterozygous)
+		unshared_count = muts0.size() + muts1.size() - 2 * shared_count;
+		
+		// pi is the mean heterozygosity across the chromosome
+		pi_ind = unshared_count / (sim.chromosome.lastPosition + 1);
+		total = total + pi_ind;
+	}
+	
+	size = indvs.size();
+	pi = total / size;
+	out = sim.generation + "\t" + pop.id + "\t" + pi + "\t" +size + "\t" + paste(target.spatialPosition,sep=",");
+	return out;
+
+}
+
+//neutral mutation summary
+function (s) getNeuMut(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m1);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	Het1=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het2=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	Het=(Het1+Het2);
+	mHet=mean(Het);
+	out=sim.generation +"\t"+ pop.id +"\t"+ indvCount +"\t"+ Mutcount +"\t"+ mHet;
+	return(out);
+}
+
+//population summary statistics
+function (s) getPopSumm(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m2);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	ScoefMut=abs(m_uniq.selectionCoeff);
+	DcoefMut=m_uniq.getValue("dom");
+	HomRef=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	HomAlt=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het1=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het2=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	Het=(Het1+Het2);
+	mHet=mean(Het);
+	mLoad_homo=sum(ScoefMut*HomAlt);
+	mLoad_hetero=sum(ScoefMut*DcoefMut*Het);
+	mLoad=mLoad_homo+mLoad_hetero;
+	out=sim.generation +"\t"+ pop.id +"\t"+ indvCount +"\t"+ Mutcount +"\t"+ sum(HomAlt==1.0)+"\t"+ mHet +"\t"+ mLoad_homo +"\t"+ mLoad_hetero +"\t"+ mLoad;
+	return(out);
+}
+
+//new n tasty pop summ
+function (s) getPopSummary(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m2);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	freqMut=sim.mutationFrequencies(pop,m_uniq);
+	ScoefMut=abs(m_uniq.selectionCoeff);
+	DcoefMut=m_uniq.getValue("dom");
+	HomRef=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	HomAlt=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het1=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==F&i.genome2.containsMutations(applyValue)==T)/i.size();");
+	Het2=sapply(m_uniq, "sum(i.genome1.containsMutations(applyValue)==T&i.genome2.containsMutations(applyValue)==F)/i.size();");
+	Het=(Het1+Het2);
+	mHet=mean(Het);
+	mLoad_homo=sum(ScoefMut*HomAlt);
+	mLoad_hetero=sum(ScoefMut*DcoefMut*Het);
+	mLoad=mLoad_homo+mLoad_hetero;
+	totalLoad=sum(freqMut*ScoefMut);
+	relzLoad=sum(freqMut^2*ScoefMut)+ (2*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+	mskLoad=sum(freqMut*ScoefMut) - sum(freqMut^2*ScoefMut) - (2*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+	
+	FROH_total=0;
+	for(indv in pop.individuals){
+		indm = sortBy(indv.genomes.mutations, "position");
+		indm_uniq = unique(indm);
+		genotype = sapply(indm_uniq, "sum(indm == applyValue);");
+		if (isNULL(genotype)) {
+			FROH_total = FROH_total+ 0;
+			next;
+		}
+		ID_het = (genotype == 1); //outputs T/F for genotypes if they are het or homDer
+		ID_homDer = (genotype == 2);
+		pos_het = indm_uniq.position[ID_het]; //outputs positions of heterozgoys genotypes
+		startpos = c(0, pos_het); //adds 0 to beggining of vector of hets
+		endpos = c(pos_het, sim.chromosome.lastPosition); //adds last position in genome to vector of hets
+		pos_het_diff = endpos - startpos;
+		ROHcutoff=1e6; // same for a different ROH cutoff value
+		ROH_startpos = startpos[pos_het_diff > ROHcutoff];
+		ROH_endpos = endpos[pos_het_diff > ROHcutoff];
+		ROH_length = pos_het_diff[pos_het_diff > ROHcutoff];
+		ROH_length_sum = sum(ROH_length);
+		ROH_out=ROH_length_sum/chromLen;
+		FROH_total=FROH_total+ROH_out;
+	}
+	FROH_mean=FROH_total/pop.individualCount;
+	
+	relzLoad_FROH=sum((1-FROH_mean)*freqMut^2*ScoefMut+FROH_mean*freqMut*ScoefMut)+ 2*(1-FROH_mean)*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut);
+	mskLoad_FROH= sum(freqMut*ScoefMut) - (sum((1-FROH_mean)*freqMut^2*ScoefMut+FROH_mean*freqMut*ScoefMut)) -  (2*(1-FROH_mean)*sum(freqMut*(1-freqMut)*ScoefMut*DcoefMut));
+	
+	
+	fitness_indv=c();
+	for(indv in pop.individuals){
+		// Calculate individual fitness
+		muts0_m2 = indv.genomes[0].mutationsOfType(m2);
+		muts1_m2 = indv.genomes[1].mutationsOfType(m2);
+		HOMO_m2=setIntersection(muts0_m2,muts1_m2);
+		HETERO_m2=setSymmetricDifference(muts0_m2,muts1_m2);
+		if(length(HETERO_m2)>0){fit_hetero=abs(HETERO_m2.selectionCoeff*HETERO_m2.getValue("dom"));}
+		if(length(HETERO_m2)==0){fit_hetero=0;}
+		fit_homo=HOMO_m2.selectionCoeff;
+		if(length(fit_homo)==0){fit_homo=0;}
+		indv_fit=sum(1-fit_homo)*sum(1-fit_hetero);
+		fitness_indv=c(fitness_indv,indv_fit);
+	}
+	
+	fitness_cached=pop.cachedFitness(pop.individuals.index);
+	
+	x = pop.getValue("ENV_MATRIX");
+	hab  = sum(x);
+	
+	
+	out=sim.generation +"\t"+ pop.id +"\t"+ indvCount +"\t"+ Mutcount +"\t"+ sum(HomAlt==1.0)+"\t"+ mHet +"\t"+ mLoad_homo +"\t"+ mLoad_hetero +"\t"+ mLoad +"\t"+ totalLoad +"\t"+ relzLoad +"\t"+ mskLoad +"\t"+ relzLoad_FROH +"\t"+ mskLoad_FROH+"\t"+mean(fitness_indv)+"\t"+sd(fitness_indv)+"\t"+mean(fitness_cached)+"\t"+sd(fitness_cached) +"\t"+ hab;
+	return(out);
+}
+
+
+function (s) geths(o pop)
+{
+	i=pop.individuals;
+	indvCount=length(i);
+	m = i.uniqueMutationsOfType(m2);
+	m_uniq = unique(m);
+	Mutcount=length(m_uniq);
+	freqMut=sim.mutationFrequencies(pop,m_uniq);
+	ScoefMut=abs(m_uniq.selectionCoeff);
+	DcoefMut=m_uniq.getValue("dom");
+	out=sim.generation +"\t"+ pop.id +"\t"+ freqMut+"\t"+ ScoefMut +"\t"+ DcoefMut;
+	return(out);
+}
+
+function (s) getIndvLoad(o pop, i sampSize)
+{
+	i2.evaluate(pop);
+	target=pop.sampleIndividuals(1);
+	pop_indv=i2.drawByStrength(target, sampSize);
+	out=c();
+	for(indv in pop_indv){
+		mut=indv.uniqueMutationsOfType(m2);
+		if(length(mut)==0){next;}
+		index=indv.index;
+		age=indv.age;
+		mutOrgGen=mut.originGeneration;
+		mutOrgPop=mut.subpopID;
+		mutS=mut.selectionCoeff;
+		mutH=mut.getValue("dom");
+		mutFreq=sim.mutationFrequencies(pop,mut);
+		HomRef=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==F)/indv.size();");
+		HomAlt=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+		Het=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==F)/indv.size();")+sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+		
+		Lmut=length(mut);
+		f11=sum(HomAlt)/Lmut;
+		sHom=mean(abs(mutS[HomAlt==1]));
+		if(isNULL(sHom)){sHom=0;}
+		f01=sum(Het)/Lmut;
+		shHet=mean(abs(mutS[Het==1])*mutH[Het==1]);
+		if(isNULL(shHet)){shHet=0;}
+		sHet=mean(abs(mutS[Het==1]));
+		if(isNULL(sHet)){sHet=0;}
+		
+		relzLoad_f2=Lmut*(f11*sHom+f01*shHet);
+		mskLoad_f2=Lmut*f01*((0.5*sHet)-shHet);
+		totalLoad_f2=Lmut*(f11*sHom+(0.5*f01)*sHet);
+		
+		indv_out=sim.generation +"\t"+ pop.id +"\t"+ index +"\t"+ age +"\t"+ relzLoad_f2 +"\t"+ mskLoad_f2 +"\t"+ totalLoad_f2 +"\t"+ pop.cachedFitness(indv.index);
+		
+		out=c(out,indv_out);
+	}
+	return(out);
+}
+
+
+
+
+//individual mutations
+function (s) getIndvMut(o pop, i sampSize)
+{
+	pop_indv=pop.sampleIndividuals(sampSize);
+	out=c();
+	for(indv in pop_indv){
+		mut=indv.uniqueMutationsOfType(m2);
+		if(length(mut)==0){next;}
+		index=indv.index;
+		age=indv.age;
+		mutOrgGen=mut.originGeneration;
+		mutOrgPop=mut.subpopID;
+		mutS=mut.selectionCoeff;
+		mutH=mut.getValue("dom");
+		mutFreq=sim.mutationFrequencies(pop,mut);
+		HomRef=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==F)/indv.size();");
+		HomAlt=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+		Het=sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==T&indv.genome2.containsMutations(applyValue)==F)/indv.size();")+sapply(mut, "sum(indv.genome1.containsMutations(applyValue)==F&indv.genome2.containsMutations(applyValue)==T)/indv.size();");
+		// ROH
+		indm = sortBy(indv.genomes.mutations, "position");
+		indm_uniq = unique(indm);
+		genotype = sapply(indm_uniq, "sum(indm == applyValue);");
+		if (isNULL(genotype)) {
+			ind_ROH = c(ind_ROH, "NA");
+			next;
+		}
+		ID_het = (genotype == 1); //outputs T/F for genotypes if they are het or homDer
+		ID_homDer = (genotype == 2);
+		pos_het = indm_uniq.position[ID_het]; //outputs positions of heterozgoys genotypes
+		startpos = c(0, pos_het); //adds 0 to beggining of vector of hets
+		endpos = c(pos_het, sim.chromosome.lastPosition); //adds last position in genome to vector of hets
+		pos_het_diff = endpos - startpos;
+		ROHcutoff=1e5;
+		ROH_startpos = startpos[pos_het_diff > ROHcutoff]; //filter out startpos that dont correspond to ROH > ROH_length
+		ROH_endpos = endpos[pos_het_diff > ROHcutoff];
+		ROH_length = pos_het_diff[pos_het_diff > ROHcutoff]; //vector of ROHs for each individual
+		ROH_length_sum = sum(ROH_length);
+		ROH_out1=ROH_length_sum/chromLen;
+		ROHcutoff=1e6; // same for a different ROH cutoff value
+		ROH_startpos = startpos[pos_het_diff > ROHcutoff];
+		ROH_endpos = endpos[pos_het_diff > ROHcutoff];
+		ROH_length = pos_het_diff[pos_het_diff > ROHcutoff];
+		ROH_length_sum = sum(ROH_length);
+		ROH_out2=ROH_length_sum/chromLen;
+		indv_out=sim.generation +"\t"+ pop.id +"\t"+ index +"\t"+ age +"\t"+ ROH_out1 +"\t"+ ROH_out1 +"\t"+ mutOrgGen+"\t"+ mutOrgPop +"\t"+ mutS +"\t"+ mutH +"\t"+ mutFreq +"\t"+ HomRef +"\t"+ HomAlt +"\t"+ Het;
+		out=c(out,indv_out);
+	}
+	return(out);
+}
+
+//Isolation by distance
+function (s) getIBD(o pop)
+{
+	out = c(); //prepare empty output vector
+	noll = pop.sampleIndividuals(1); //find two individuals to compare
+	ett = pop.sampleIndividuals(1);
+	noll_muts=noll.uniqueMutations; //get mutations
+	ett_muts=ett.uniqueMutations;
+	shared_count = sum(match(noll_muts, ett_muts) >= 0); //find shared mutation count
+	unshared_count =  size(noll_muts) - shared_count ;
+	diffbyBP = unshared_count / seqLength;	//differences in mutation per total BP in genome
+	noll_pos = noll.spatialPosition;	//get coords for pair
+	ett_pos = ett.spatialPosition;
+	dist = sqrt(((noll_pos[0]-ett_pos[0])^2)+((noll_pos[1]-ett_pos[1])^2)); //find distance w/ pythagoras
+	popsize = p1.individualCount;
+	out = c(sim.generation +"\t"+ popsize +"\t"+ diffbyBP +"\t"+ dist +"\t"+ noll_pos +"\t"+ ett_pos);
+	return(out);
+
+}
+
+//Quantify mortality
+function (s) getIndvMort(o pop, i sampSize)
+{
+	i1.evaluate(p1);
+	pop_indv=pop.sampleIndividuals(sampSize);
+	out=c();
+	
+	for(indv in pop_indv){
+		//		indv.tag=sim.generation;
+		index = indv.index;
+		//		competition = i1.totalOfNeighborStrengths(indv);
+		location = indv.spatialPosition; ////////get the x and y value of each individual
+		optimum = (p1.spatialMapValue("map1", location)+0.00001 );
+		ages = indv.age;
+		survival = indv.tagF;
+		age_fit = pmin(0.95, indv.z * survival);
+		end_fit = p1.cachedFitness(indv.index);
+		
+		indv_out=sim.generation +"\t"+ index +"\t"+ ages +"\t" + age_fit +"\t"+ end_fit;
+		out=c(out,indv_out);
+	}
+	return(out);
+}
+
+
+
+
+////////////////HABIAT COLLAPSE////////////////////////
+
+
+88803 early() {
+	X = readFile("1774 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88804 early() {
+	X = readFile("1775 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88805 early() {
+	X = readFile("1776 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88806 early() {
+	X = readFile("1776 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88807 early() {
+	X = readFile("1776 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88808 early() {
+	X = readFile("1777 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88808 early() {
+	X = readFile("1778 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88809 early() {
+	X = readFile("1778 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88810 early() {
+	X = readFile("1779 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88811 early() {
+	X = readFile("1780 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88812 early() {
+	X = readFile("1781 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88813 early() {
+	X = readFile("1782 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88814 early() {
+	X = readFile("1783 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88815 early() {
+	X = readFile("1784 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88816 early() {
+	X = readFile("1785 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88817 early() {
+	X = readFile("1786 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88818 early() {
+	X = readFile("1787 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88819 early() {
+	X = readFile("1788 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88820 early() {
+	X = readFile("1789 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88821 early() {
+	X = readFile("1790 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88822 early() {
+	X = readFile("1791 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88823 early() {
+	X = readFile("1792 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88824 early() {
+	X = readFile("1794 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88825 early() {
+	X = readFile("1795 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88826 early() {
+	X = readFile("1796 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88827 early() {
+	X = readFile("1797 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88828 early() {
+	X = readFile("1798 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88829 early() {
+	X = readFile("1799 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88830  early() {
+	X = readFile("1800 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88831 early() {
+	X = readFile("1801 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88832 early() {
+	X = readFile("1802 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88833 early() {
+	X = readFile("1803 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88834 early() {
+	X = readFile("1804 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88835 early() {
+	X = readFile("1805 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88836 early() {
+	X = readFile("1806 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88837 early() {
+	X = readFile("1807 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88838 early() {
+	X = readFile("1808 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88839 early() {
+	X = readFile("1809 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88840 early() {
+	X = readFile("1810 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88841 early() {
+	X = readFile("1811 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88842 early() {
+	X = readFile("1812 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88843 early() {
+	X = readFile("1813 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88844 early() {
+	X = readFile("1814 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88845 early() {
+	X = readFile("1815 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88846 early() {
+	X = readFile("1816 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88847 early() {
+	X = readFile("1817 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88848 early() {
+	X = readFile("1819 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88849 early() {
+	X = readFile("1820 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88850 early() {
+	X = readFile("1821 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88851 early() {
+	X = readFile("1822 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88852 early() {
+	X = readFile("1823 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88853 early() {
+	X = readFile("1824 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88858 early() {
+	X = readFile("1825 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88859 early() {
+	X = readFile("1826 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88860 early() {
+	X = readFile("1827 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88861 early() {
+	X = readFile("1828 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88862 early() {
+	X = readFile("1829 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88863 early() {
+	X = readFile("1830 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88864 early() {
+	X = readFile("1831 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88865 early() {
+	X = readFile("1832 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88866 early() {
+	X = readFile("1833 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88867 early() {
+	X = readFile("1834 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88868 early() {
+	X = readFile("1835 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88869 early() {
+	X = readFile("1836 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88870 early() {
+	X = readFile("1837 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88871 early() {
+	X = readFile("1838 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88872 early() {
+	X = readFile("1839 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88873 early() {
+	X = readFile("1840 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88874 early() {
+	X = readFile("1841 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88875 early() {
+	X = readFile("1842 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88876 early() {
+	X = readFile("1843 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88877 early() {
+	X = readFile("1844 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88878 early() {
+	X = readFile("1845 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88879 early() {
+	X = readFile("1846 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88880 early() {
+	X = readFile("1847 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88881 early() {
+	X = readFile("1848 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88882 early() {
+	X = readFile("1849 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88883 early() {
+	X = readFile("1850 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88884 early() {
+	X = readFile("1851 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88885 early() {
+	X = readFile("1852 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88886 early() {
+	X = readFile("1853 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88887 early() {
+	X = readFile("1854 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88888 early() {
+	X = readFile("1855 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88889 early() {
+	X = readFile("1856 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88890 early() {
+	X = readFile("1857 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88891 early() {
+	X = readFile("1858 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88892 early() {
+	X = readFile("1859 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88893 early() {
+	X = readFile("1860 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88894 early() {
+	X = readFile("1861 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88895 early() {
+	X = readFile("1862 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88896 early() {
+	X = readFile("1863 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88897 early() {
+	X = readFile("1864 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88898 early() {
+	X = readFile("1865 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88899 early() {
+	X = readFile("1866 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88900 early() {
+	X = readFile("1867 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88901 early() {
+	X = readFile("1868 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88902 early() {
+	X = readFile("1869 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88903 early() {
+	X = readFile("1870 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88904 early() {
+	X = readFile("1871 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88906 early() {
+	X = readFile("1873 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88907 early() {
+	X = readFile("1874 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88908 early() {
+	X = readFile("1875 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88909 early() {
+	X = readFile("1876 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88910 early() {
+	X = readFile("1877 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88911 early() {
+	X = readFile("1878 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88912 early() {
+	X = readFile("1879 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88913 early() {
+	X = readFile("1880 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88914 early() {
+	X = readFile("1881 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88915 early() {
+	X = readFile("1882 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88916 early() {
+	X = readFile("1883 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88917 early() {
+	X = readFile("1884 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88918 early() {
+	X = readFile("1885 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88919 early() {
+	X = readFile("1886 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88920 early() {
+	X = readFile("1887 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88921 early() {
+	X = readFile("1888 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88922 early() {
+	X = readFile("1889 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88923 early() {
+	X = readFile("1890 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88924 early() {
+	X = readFile("1891 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88925 early() {
+	X = readFile("1892 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88926 early() {
+	X = readFile("1893 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88927 early() {
+	X = readFile("1894 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88928 early() {
+	X = readFile("1895 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88929 early() {
+	X = readFile("1896 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88930 early() {
+	X = readFile("1897 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88931 early() {
+	X = readFile("1898 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88932 early() {
+	X = readFile("1899 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88933 early() {
+	X = readFile("1900 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88934 early() {
+	X = readFile("1901 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88935 early() {
+	X = readFile("1902 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88936 early() {
+	X = readFile("1903 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88937 early() {
+	X = readFile("1904 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88938 early() {
+	X = readFile("1905 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88939 early() {
+	X = readFile("1906 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88940 early() {
+	X = readFile("1907 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88941 early() {
+	X = readFile("1908 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88942 early() {
+	X = readFile("1909 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88943 early() {
+	X = readFile("1910 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88944 early() {
+	X = readFile("1911 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88945 early() {
+	X = readFile("1912 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88946 early() {
+	X = readFile("1913 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88947 early() {
+	X = readFile("1914 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88948 early() {
+	X = readFile("1915 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88949 early() {
+	X = readFile("1916 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88950 early() {
+	X = readFile("1917 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88951 early() {
+	X = readFile("1918 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88952 early() {
+	X = readFile("1919 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88953 early() {
+	X = readFile("1920 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88954 early() {
+	X = readFile("1921 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88955 early() {
+	X = readFile("1922 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88956 early() {
+	X = readFile("1923 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88957 early() {
+	X = readFile("1924 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88958 early() {
+	X = readFile("1925 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88959 early() {
+	X = readFile("1926 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88960 early() {
+	X = readFile("1927 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88961 early() {
+	X = readFile("1928 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88962 early() {
+	X = readFile("1929 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88963 early() {
+	X = readFile("1930 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88964 early() {
+	X = readFile("1931 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88965 early() {
+	X = readFile("1932 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88966 early() {
+	X = readFile("1933 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88967 early() {
+	X = readFile("1934 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88968 early() {
+	X = readFile("1935 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88969 early() {
+	X = readFile("1936 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88980 early() {
+	X = readFile("1937 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88971 early() {
+	X = readFile("1938 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88972 early() {
+	X = readFile("1939 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88973 early() {
+	X = readFile("1940 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88974 early() {
+	X = readFile("1941 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88975 early() {
+	X = readFile("1942 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88976 early() {
+	X = readFile("1943 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88978 early() {
+	X = readFile("1944 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88979 early() {
+	X = readFile("1945 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88980 early() {
+	X = readFile("1946 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88981 early() {
+	X = readFile("1947 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88982 early() {
+	X = readFile("1948 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88989 early() {
+	X = readFile("1949 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88990 early() {
+	X = readFile("1950 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88991 early() {
+	X = readFile("1951 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88992 early() {
+	X = readFile("1952 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88993 early() {
+	X = readFile("1953 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88994 early() {
+	X = readFile("1954 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88995 early() {
+	X = readFile("1954 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88996 early() {
+	X = readFile("1955 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88997 early() {
+	X = readFile("1956 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88998 early() {
+	X = readFile("1957 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+88999 early() {
+	X = readFile("1958 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89000 early() {
+	X = readFile("1959 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89001 early() {
+	X = readFile("1960 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89002 early() {
+	X = readFile("1961 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89003 early() {
+	X = readFile("1962 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89004 early() {
+	X = readFile("1963 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89005 early() {
+	X = readFile("1964 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89006 early() {
+	X = readFile("1965 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89007 early() {
+	X = readFile("1966 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89008 early() {
+	X = readFile("1967 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89009 early() {
+	X = readFile("1968 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89010 early() {
+	X = readFile("1969 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89011 early() {
+	X = readFile("1970 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89012 early() {
+	X = readFile("1971 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89013 early() {
+	X = readFile("1972 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89014 early() {
+	X = readFile("1973 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89015 early() {
+	X = readFile("1974 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89016 early() {
+	X = readFile("1975 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89017 early() {
+	X = readFile("1976 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89018 early() {
+	X = readFile("1977 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89019 early() {
+	X = readFile("1978 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89020 early() {
+	X = readFile("1979 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89021 early() {
+	X = readFile("1980 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89022 early() {
+	X = readFile("1981 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89023 early() {
+	X = readFile("1982 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89024 early() {
+	X = readFile("1983 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89025 early() {
+	X = readFile("1984 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89026 early() {
+	X = readFile("1986 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89027 early() {
+	X = readFile("1987 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89028 early() {
+	X = readFile("1988 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89029 early() {
+	X = readFile("1989 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89030 early() {
+	X = readFile("1990 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89031 early() {
+	X = readFile("1991 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89032 early() {
+	X = readFile("1992 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+
+89033 early() {
+	X = readFile("1993 .txt");
+	X = asFloat(X);
+	X = rev(X);
+	X = matrix(X, nrow=800,ncol=700,byrow=T);
+	p1.setValue("ENV_MATRIX",X);
+	p1.defineSpatialMap("map1", "xy", NULL, X, interpolate=T,valueRange=range(X), colors=c("blue","green"));
+}
+//////
+89300 late()
+{////maximum reach of simulation, if it does not terminate
+	print("simulation finished at "+sim.generation+" with N="+p1.individualCount);
+	sim.simulationFinished();
+}
+
+///// Finito
